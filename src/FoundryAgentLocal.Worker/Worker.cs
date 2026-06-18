@@ -6,7 +6,8 @@ public sealed class Worker : BackgroundService
     private readonly IConfiguration _configuration;
     private readonly ILogger<Worker> _logger;
     private readonly HashSet<string> _recentlyProcessed = new(StringComparer.OrdinalIgnoreCase);
-    private readonly object _debouncelock = new();
+    private readonly object _debounceLock = new();
+    private FileSystemWatcher? _watcher;
 
     public Worker(IAgentRunner agentRunner, IConfiguration configuration, ILogger<Worker> logger)
     {
@@ -23,23 +24,24 @@ public sealed class Worker : BackgroundService
         if (!Directory.Exists(watchPath))
             Directory.CreateDirectory(watchPath);
 
-        var watcher = new FileSystemWatcher(watchPath)
+        _watcher = new FileSystemWatcher(watchPath)
         {
             NotifyFilter = NotifyFilters.DirectoryName,
             IncludeSubdirectories = false,
             EnableRaisingEvents = true
         };
 
-        watcher.Created += (_, e) => OnDirectoryCreated(e.FullPath, stoppingToken);
+        _watcher.Created += (_, e) => OnDirectoryCreated(e.FullPath, stoppingToken);
         _logger.LogInformation("Watching for new folders in: {Path}", watchPath);
 
-        stoppingToken.Register(() =>
-        {
-            watcher.EnableRaisingEvents = false;
-            watcher.Dispose();
-        });
-
         return Task.CompletedTask;
+    }
+
+    public override void Dispose()
+    {
+        _watcher?.Dispose();
+        _watcher = null;
+        base.Dispose();
     }
 
     private void OnDirectoryCreated(string fullPath, CancellationToken cancellationToken)
@@ -48,7 +50,7 @@ public sealed class Worker : BackgroundService
             return;
 
         bool shouldProcess;
-        lock (_debouncelock)
+        lock (_debounceLock)
         {
             shouldProcess = _recentlyProcessed.Add(fullPath);
         }
@@ -69,7 +71,7 @@ public sealed class Worker : BackgroundService
             finally
             {
                 await Task.Delay(TimeSpan.FromSeconds(5), CancellationToken.None);
-                lock (_debouncelock)
+                lock (_debounceLock)
                 {
                     _recentlyProcessed.Remove(fullPath);
                 }

@@ -14,11 +14,12 @@ public class WorkerTests
         var watchPath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         Directory.CreateDirectory(watchPath);
 
+        var called = new TaskCompletionSource<string>(TaskCreationOptions.RunContinuationsAsynchronously);
+
         var mockRunner = new Mock<IAgentRunner>();
-        string? capturedPath = null;
         mockRunner
             .Setup(r => r.RunAsync(It.IsAny<string>(), It.IsAny<CancellationToken>()))
-            .Callback<string, CancellationToken>((p, _) => capturedPath = p)
+            .Callback<string, CancellationToken>((p, _) => called.TrySetResult(p))
             .Returns(Task.CompletedTask);
 
         var config = new ConfigurationBuilder()
@@ -32,18 +33,21 @@ public class WorkerTests
 
         using var cts = new CancellationTokenSource();
         await worker.StartAsync(cts.Token);
+        // On .NET 10, BackgroundService.StartAsync dispatches ExecuteAsync via Task.Run,
+        // so the FileSystemWatcher isn't set up until after StartAsync returns.
+        await Task.Delay(200);
 
         var newFolder = Path.Combine(watchPath, "test topic");
         Directory.CreateDirectory(newFolder);
 
-        await Task.Delay(2000);
+        var capturedPath = await called.Task.WaitAsync(TimeSpan.FromSeconds(10));
         cts.Cancel();
         await worker.StopAsync(CancellationToken.None);
 
+        Assert.Equal(newFolder, capturedPath);
         mockRunner.Verify(
             r => r.RunAsync(It.Is<string>(p => p == newFolder), It.IsAny<CancellationToken>()),
             Times.Once);
-        Assert.Equal(newFolder, capturedPath);
 
         Directory.Delete(watchPath, recursive: true);
     }
@@ -70,7 +74,7 @@ public class WorkerTests
 
         await File.WriteAllTextAsync(Path.Combine(watchPath, "somefile.txt"), "hello");
 
-        await Task.Delay(300);
+        await Task.Delay(500);
         cts.Cancel();
         await worker.StopAsync(CancellationToken.None);
 
