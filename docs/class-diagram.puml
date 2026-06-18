@@ -1,0 +1,137 @@
+@startuml class-diagram
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 13
+skinparam classBackgroundColor #E8F4FD
+skinparam classBorderColor #2980B9
+skinparam classHeaderBackgroundColor #2980B9
+skinparam classHeaderFontColor #FFFFFF
+skinparam interfaceBackgroundColor #EBF5FB
+skinparam interfaceBorderColor #1ABC9C
+skinparam abstractBackgroundColor #F9F9F9
+skinparam stereotypeCBackgroundColor #E8DAEF
+skinparam arrowColor #2C3E50
+skinparam arrowThickness 2
+skinparam noteBorderColor #F39C12
+skinparam noteBackgroundColor #FEF9E7
+
+title FoundryAgentLocal — Class Diagram
+
+namespace FoundryAgentLocal.Worker {
+
+  interface IAgentRunner <<interface>> {
+    + RunAsync(folderPath : string, cancellationToken : CancellationToken) : Task
+  }
+
+  class Worker {
+    - _agentRunner : IAgentRunner
+    - _configuration : IConfiguration
+    - _logger : ILogger<Worker>
+    - _recentlyProcessed : HashSet<string>
+    - _debounceLock : object
+    - _watcher : FileSystemWatcher?
+    # ExecuteAsync(stoppingToken : CancellationToken) : Task
+    + Dispose() : void
+    - OnDirectoryCreated(fullPath : string, ct : CancellationToken) : void
+  }
+
+  class AgentRunner {
+    - _projectEndpoint : string
+    - _modelDeploymentName : string
+    - _logger : ILogger<AgentRunner>
+    + AgentRunner(configuration, logger)
+    + RunAsync(folderPath, ct) : Task
+  }
+
+  class OllamaAgentRunner {
+    - _chatClient : IChatClient
+    - _logger : ILogger<OllamaAgentRunner>
+    + OllamaAgentRunner(chatClient, logger)
+    + RunAsync(folderPath, ct) : Task
+  }
+
+  class FakeAgentRunner {
+    + RunAsync(folderPath, ct) : Task
+  }
+
+  class ResearchPromptBuilder <<static>> {
+    + {static} Build(folderName : string) : string
+    + {static} SystemInstructions : string
+  }
+
+}
+
+namespace Microsoft.Extensions.Hosting {
+  abstract class BackgroundService {
+    # ExecuteAsync(stoppingToken) : Task
+    + StartAsync(ct) : Task
+    + StopAsync(ct) : Task
+  }
+}
+
+namespace Microsoft.Extensions.AI {
+  interface IChatClient <<interface>> {
+    + GetResponseAsync(messages, options, ct) : Task<ChatResponse>
+  }
+}
+
+namespace Microsoft.Agents.AI {
+  class ChatClientAgent {
+    + ChatClientAgent(chatClient, instructions, name, description)
+    + RunAsync(message, session, options, ct) : Task<AgentResponse>
+  }
+}
+
+namespace Azure.AI.Projects {
+  class AIProjectClient {
+    + AsAIAgent(model, instructions, name) : ChatClientAgent
+  }
+}
+
+namespace OllamaSharp {
+  class OllamaApiClient {
+    + OllamaApiClient(uri, model)
+  }
+}
+
+' Inheritance
+FoundryAgentLocal.Worker.Worker --|> Microsoft.Extensions.Hosting.BackgroundService
+FoundryAgentLocal.Worker.AgentRunner ..|> FoundryAgentLocal.Worker.IAgentRunner
+FoundryAgentLocal.Worker.OllamaAgentRunner ..|> FoundryAgentLocal.Worker.IAgentRunner
+FoundryAgentLocal.Worker.FakeAgentRunner ..|> FoundryAgentLocal.Worker.IAgentRunner
+OllamaSharp.OllamaApiClient ..|> Microsoft.Extensions.AI.IChatClient
+
+' Composition / Dependencies
+FoundryAgentLocal.Worker.Worker o-- FoundryAgentLocal.Worker.IAgentRunner : uses >
+FoundryAgentLocal.Worker.Worker *-- "1" FileSystemWatcher : owns >
+
+FoundryAgentLocal.Worker.AgentRunner ..> FoundryAgentLocal.Worker.ResearchPromptBuilder : uses >
+FoundryAgentLocal.Worker.AgentRunner ..> Azure.AI.Projects.AIProjectClient : creates >
+FoundryAgentLocal.Worker.AgentRunner ..> Microsoft.Agents.AI.ChatClientAgent : creates >
+
+FoundryAgentLocal.Worker.OllamaAgentRunner o-- Microsoft.Extensions.AI.IChatClient : injected >
+FoundryAgentLocal.Worker.OllamaAgentRunner ..> FoundryAgentLocal.Worker.ResearchPromptBuilder : uses >
+FoundryAgentLocal.Worker.OllamaAgentRunner ..> Microsoft.Agents.AI.ChatClientAgent : creates >
+
+Microsoft.Agents.AI.ChatClientAgent o-- Microsoft.Extensions.AI.IChatClient : wraps >
+
+note top of FoundryAgentLocal.Worker.Worker
+  Registered as IHostedService.
+  ExecuteAsync sets up the FSW
+  and returns immediately.
+end note
+
+note right of FoundryAgentLocal.Worker.IAgentRunner
+  Strategy pattern — runtime
+  selection via Program.cs DI
+  based on appsettings.json config.
+end note
+
+note bottom of OllamaSharp.OllamaApiClient
+  Directly implements IChatClient,
+  enabling Moq injection in unit tests
+  without a running Ollama instance.
+end note
+
+@enduml

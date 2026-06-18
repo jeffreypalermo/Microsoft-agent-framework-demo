@@ -1,0 +1,101 @@
+@startuml sequence-diagram
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 13
+skinparam sequenceArrowThickness 2
+skinparam sequenceParticipantBorderColor #2980B9
+skinparam sequenceParticipantBackgroundColor #E8F4FD
+skinparam sequenceLifeLineBorderColor #95A5A6
+skinparam sequenceGroupBorderColor #7F8C8D
+skinparam sequenceGroupBackgroundColor #F8F9FA
+skinparam noteBorderColor #F39C12
+skinparam noteBackgroundColor #FEF9E7
+
+title FoundryAgentLocal — Request Sequence (Ollama path shown)
+
+actor Developer as dev
+participant "File System\n(Watch Folder)" as fs
+participant "FileSystemWatcher" as fsw
+participant "Worker" as worker
+participant "OllamaAgentRunner" as runner
+participant "ResearchPromptBuilder" as prompt
+participant "ChatClientAgent\n(MAF)" as agent
+participant "OllamaApiClient\n(IChatClient)" as client
+participant "Ollama Server\nlocalhost:11434" as ollama
+participant "research.txt" as output
+
+== Application Startup ==
+
+[-> worker : Host.StartAsync()
+activate worker
+worker -> fsw : new FileSystemWatcher(watchPath)
+worker -> fsw : EnableRaisingEvents = true
+worker -> fsw : NotifyFilter = DirectoryName
+note right of worker : Worker.ExecuteAsync()\nreturns immediately —\nwatcher runs on OS thread pool
+
+== Directory Creation Event ==
+
+dev -> fs : mkdir "quantum computing trends"
+fs -> fsw : Created event\n(FullPath)
+activate fsw
+fsw -> worker : OnDirectoryCreated(fullPath)
+deactivate fsw
+activate worker #DDEEFF
+
+group Debounce check [lock(_debounceLock)]
+  worker -> worker : _recentlyProcessed.Add(fullPath)
+  note right : Returns false if already\nprocessed → skip duplicate
+end
+
+worker -> worker : Task.Run(async () => ...)
+note right : Dispatched to thread pool\nso FSW thread is not blocked
+
+activate worker #EEFFDD
+worker -> runner : RunAsync(folderPath, ct)
+activate runner
+
+runner -> prompt : Build("quantum computing trends")
+activate prompt
+prompt --> runner : "Research the following topic\nand produce a concise,\nstructured plain-text report:\nquantum computing trends"
+deactivate prompt
+
+runner -> prompt : SystemInstructions
+activate prompt
+prompt --> runner : "You are a research assistant.\nGather key facts, recent\ndevelopments, and implications..."
+deactivate prompt
+
+runner -> agent : new ChatClientAgent(\n  chatClient,\n  instructions,\n  name, description)
+activate agent
+
+agent -> client : GetResponseAsync(\n  [SystemMessage, UserMessage],\n  options, ct)
+activate client
+
+client -> ollama : POST /api/chat\n{ model, messages }
+activate ollama
+ollama --> client : { message: { role: assistant,\n  content: "..." } }
+deactivate ollama
+
+client --> agent : ChatResponse
+deactivate client
+
+agent --> runner : AgentResponse.Text
+deactivate agent
+
+runner -> output : File.WriteAllTextAsync(\n  "research.txt", responseText)
+activate output
+output --> runner : ✓
+deactivate output
+
+runner --> worker : Task completed
+deactivate runner
+
+== Debounce Cooldown ==
+
+worker -> worker : await Task.Delay(5s)
+worker -> worker : _recentlyProcessed.Remove(fullPath)
+note right : Path can be processed\nagain after 5 seconds
+deactivate worker
+deactivate worker
+
+@enduml

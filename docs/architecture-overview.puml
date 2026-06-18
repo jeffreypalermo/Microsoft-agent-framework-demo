@@ -1,0 +1,90 @@
+@startuml architecture-overview
+!theme plain
+skinparam backgroundColor #FAFAFA
+skinparam defaultFontName Segoe UI
+skinparam defaultFontSize 13
+
+skinparam component {
+  BackgroundColor #E8F4FD
+  BorderColor #2980B9
+  FontColor #1A1A1A
+}
+skinparam database {
+  BackgroundColor #FEF9E7
+  BorderColor #F39C12
+}
+skinparam cloud {
+  BackgroundColor #EBF5FB
+  BorderColor #2980B9
+}
+skinparam node {
+  BackgroundColor #F0F9FF
+  BorderColor #2980B9
+}
+skinparam rectangle {
+  BackgroundColor #F8F9FA
+  BorderColor #95A5A6
+}
+
+title FoundryAgentLocal — Architecture Overview
+
+actor Developer as dev
+folder "Watch Folder\n(local disk)" as watchfolder
+note right of watchfolder : e.g. C:\\AgentWatch\n or /tmp/AgentWatch
+
+rectangle "FoundryAgentLocal.Worker (.NET 10 Worker Service)" as workerservice {
+
+  component "Worker\n(BackgroundService)" as worker
+  component "FileSystemWatcher" as fsw
+
+  rectangle "IAgentRunner\n(strategy pattern)" as runner_box {
+    component "AgentRunner\n[Azure AI Foundry]" as foundry_runner #D5E8D4
+    component "OllamaAgentRunner\n[Local LLM]" as ollama_runner #D5E8D4
+    component "FakeAgentRunner\n[Stub / Dev]" as fake_runner #E8E8E8
+  }
+
+  component "ResearchPromptBuilder" as promptbuilder
+}
+
+cloud "Azure AI Foundry" as azure {
+  component "AIProjectClient" as aiclient
+  component "ChatClientAgent\n(Foundry)" as foundry_agent
+}
+
+node "Local Ollama Server\nlocalhost:11434" as ollama_server {
+  component "OllamaApiClient\n(IChatClient)" as ollama_client
+  database "gemma4 / gemma3\nmodel weights" as model
+}
+
+file "research.txt\n(output)" as researchfile
+
+dev --> watchfolder : creates subfolder\n(topic name)
+watchfolder --> fsw : directory created\nevent
+fsw --> worker : OnDirectoryCreated()
+worker --> runner_box : RunAsync(folderPath)
+runner_box --> promptbuilder : Build(folderName)\nSystemInstructions
+
+foundry_runner --> aiclient : AIProjectClient\n+ AzureCliCredential
+aiclient --> foundry_agent : AsAIAgent()
+foundry_agent --> azure : HTTP / REST
+azure --> foundry_agent : AgentResponse.Text
+
+ollama_runner --> ollama_client : IChatClient\n.GetResponseAsync()
+ollama_client --> ollama_server : HTTP API
+ollama_server --> model : inference
+model --> ollama_server
+ollama_server --> ollama_client : ChatResponse
+
+fake_runner ..> researchfile : placeholder\ncontent
+
+foundry_runner --> researchfile : writes
+ollama_runner --> researchfile : writes
+
+note bottom of runner_box
+  Selected at startup from config:
+  1. Foundry:ProjectEndpoint set  →  AgentRunner
+  2. Ollama:Endpoint set          →  OllamaAgentRunner
+  3. Neither                      →  FakeAgentRunner
+end note
+
+@enduml
