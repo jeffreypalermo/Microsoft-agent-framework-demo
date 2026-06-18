@@ -431,4 +431,3 @@ FodyWeavers.xsd
 # Local secrets / developer overrides
 appsettings.Development.json
 appsettings.Local.json
-build-local.ps1
