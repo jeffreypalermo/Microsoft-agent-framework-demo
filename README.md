@@ -8,6 +8,7 @@ The application supports three AI backends selected at startup from configuratio
 
 ## Table of Contents
 
+- [What Needs to Happen Next](#what-needs-to-happen-next)
 - [How It Works](#how-it-works)
 - [Architecture Overview](#architecture-overview)
 - [Request Sequence](#request-sequence)
@@ -16,6 +17,176 @@ The application supports three AI backends selected at startup from configuratio
 - [Running Locally](#running-locally)
 - [Testing](#testing)
 - [Project Structure](#project-structure)
+
+---
+
+## What Needs to Happen Next
+
+The code builds, all unit tests pass, and the architecture is complete. What is **not** yet verified end-to-end is the AI inference call itself — that requires live infrastructure. Here is exactly what to do to make each path work.
+
+---
+
+### Path A — Local Ollama (fastest, no cloud account needed)
+
+**1. Install Ollama**
+
+Download and install from [ollama.com](https://ollama.com). Available for macOS, Windows, and Linux.
+
+**2. Pull the model**
+
+```sh
+ollama pull gemma4
+```
+
+This downloads the model weights (~10–30 GB depending on the variant). The first pull takes several minutes. Verify it succeeded:
+
+```sh
+ollama list
+# Should show gemma4 in the list
+```
+
+> **Tip:** If your machine does not have enough VRAM or RAM for `gemma4`, try a smaller model such as `gemma3:4b`, `phi4-mini`, or `llama3.2:3b` and update `Ollama:Model` accordingly.
+
+**3. Confirm Ollama is running**
+
+Ollama starts a local HTTP server on port 11434. Confirm it is reachable:
+
+```sh
+curl http://localhost:11434/api/tags
+# Should return JSON listing available models
+```
+
+If the command fails, start Ollama manually:
+
+```sh
+ollama serve
+```
+
+**4. Create `appsettings.Development.json`**
+
+Create this file at `src/FoundryAgentLocal.Worker/appsettings.Development.json` (it is gitignored — never committed):
+
+```json
+{
+  "Ollama": {
+    "Endpoint": "http://localhost:11434",
+    "Model": "gemma4"
+  },
+  "WatchFolder": {
+    "Path": "C:\\AgentWatch"
+  }
+}
+```
+
+On macOS/Linux use a Unix path for `WatchFolder:Path`, e.g. `"/tmp/AgentWatch"`.
+
+**5. Run the worker**
+
+```sh
+cd src/FoundryAgentLocal.Worker
+dotnet run
+```
+
+You should see:
+
+```
+info: FoundryAgentLocal.Worker.Worker[0]
+      Watching for new folders in: C:\AgentWatch
+```
+
+**6. Trigger the agent**
+
+Create a subdirectory inside the watch folder — the folder name becomes the research topic:
+
+```sh
+mkdir "C:\AgentWatch\quantum computing trends"
+```
+
+Within a few seconds `research.txt` will appear inside that folder containing the model's response.
+
+**7. Run the full local validation script**
+
+```powershell
+.\build-local.ps1
+```
+
+This builds, runs unit tests, and runs the Ollama integration test end-to-end (see `build-local.ps1` at the repo root).
+
+---
+
+### Path B — Azure AI Foundry (requires Azure subscription)
+
+**1. Create an Azure AI Foundry project**
+
+1. Go to [ai.azure.com](https://ai.azure.com) and sign in.
+2. Create a new **Hub** (or use an existing one), then create a **Project** inside it.
+3. Note the **Project endpoint** — it looks like:
+   ```
+   https://<hub-name>.services.ai.azure.com/api/projects/<project-name>
+   ```
+   This is shown on the project overview page under **Project details**.
+
+**2. Deploy a model**
+
+1. Inside the project, go to **Models + endpoints** → **Deploy model**.
+2. Deploy `gpt-4o-mini` (or any chat-completion model).
+3. Note the **Deployment name** — this is what goes into `Foundry:ModelDeploymentName`.
+
+**3. Assign yourself the correct RBAC role**
+
+The app authenticates using `AzureCliCredential` (your local `az login` identity). Your Azure account needs the **Azure AI Developer** role on the Foundry project resource, or at minimum **Cognitive Services User** on the deployed model endpoint.
+
+Assign in the Azure Portal under the project resource → **Access control (IAM)** → **Add role assignment**.
+
+**4. Log in with the Azure CLI**
+
+```sh
+az login
+az account set --subscription "<your-subscription-id>"
+```
+
+Verify the login resolves correctly:
+
+```sh
+az account show
+```
+
+**5. Create `appsettings.Development.json`**
+
+```json
+{
+  "Foundry": {
+    "ProjectEndpoint": "https://<hub-name>.services.ai.azure.com/api/projects/<project-name>",
+    "ModelDeploymentName": "gpt-4o-mini"
+  },
+  "WatchFolder": {
+    "Path": "C:\\AgentWatch"
+  }
+}
+```
+
+**6. Run the worker and trigger the agent**
+
+```sh
+cd src/FoundryAgentLocal.Worker
+dotnet run
+```
+
+Create a subfolder in the watch path — `research.txt` will be written by the Azure-hosted model.
+
+---
+
+### Common First-Run Issues
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| Worker starts but no `research.txt` appears | Watch folder path mismatch | Confirm `WatchFolder:Path` matches the directory you are creating folders in |
+| `research.txt` contains `[Fake research result...]` | Neither Foundry nor Ollama endpoint is configured | Check `appsettings.Development.json` exists and has a non-empty endpoint value |
+| Ollama returns an error about the model | Model not pulled or name mismatch | Run `ollama list` and match the name exactly in config, e.g. `gemma4:27b` not `gemma4` |
+| `AggregateException: No credential...` | Azure CLI not logged in or wrong subscription | Run `az login` and `az account set` |
+| `403 Forbidden` from Azure | Missing RBAC role | Assign **Azure AI Developer** role to your identity on the Foundry project |
+| `Connection refused` on Ollama | Ollama server not running | Run `ollama serve` in a separate terminal |
+| Worker exits immediately | `WatchFolder:Path` config key missing | Ensure `appsettings.Development.json` is in `src/FoundryAgentLocal.Worker/` not the repo root |
 
 ---
 
